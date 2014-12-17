@@ -31,7 +31,6 @@ Installing the Integration Scripts
 
 1. Load `AppCodeImportExport.bas` into a new module in your database with that exact name.
 2. Edit your `AppCodeImportExport` and change the constant `INCLUDE_TABLES` to list any lookup tables that function more as part of your application code than as client data. (For example, "Countries", "Colors", and things like that.)
-3. Copy the scripts folder as a child of `~/MyProject` .
 
 First Commit to Your Source Control System
 ------------------------------------------
