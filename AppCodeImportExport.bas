@@ -41,12 +41,12 @@ Option Explicit
 ' --------------------------------
 
 ' List of lookup tables that are part of the program rather than the
-' data, to be exported with source code
+' data, to be exported with contained data
 '
 ' Provide a comma separated list of table names, or an empty string
-' ("") if no tables are to be exported with the source code.
+' ("") if no data tables are to be exported.
 
-Private Const INCLUDE_TABLES = ""
+Private Const DATA_TABLES = ""
 
 ' Do more aggressive removal of superfluous blobs from exported MS
 ' Access source code?
@@ -509,26 +509,24 @@ Public Sub ExportAllSource()
     obj_count = 0
     Debug.Print PadRight("Exporting tables...", 24);
     For Each td In CurrentDb.TableDefs
-        'TableDefAttributeEnum
-        'Defs for HiddenObject and SystemObject wrong
-        'HiddenObject = 2
-        'SystemObject = -2147483648
+
         
         Dim schemaOnly As Boolean
         schemaOnly = True
         
         'check if we need to export the data
-        If (Len(Replace(INCLUDE_TABLES, " ", "")) > 0) Then
-            For Each tblName In Split(INCLUDE_TABLES, ",")
+        If (Len(Replace(DATA_TABLES, " ", "")) > 0) Then
+            For Each tblName In Split(DATA_TABLES, ",")
                 If td.Name = tblName Then schemaOnly = False
             Next
         End If
         
         If schemaOnly Then
-            'we dont want to export hidden or system objects - unless they are explicitly declared in INCLUDE_TABLES!
-'            Debug.Print td.Attributes
-'            Debug.Print td.Attributes And TableDefAttributeEnum.dbAttachedTable
-'            Debug.Print (td.Attributes And TableDefAttributeEnum.dbAttachedTable) = TableDefAttributeEnum.dbAttachedTable
+            'we dont want to export hidden, system or linked objects - unless they are explicitly declared in DATA_TABLES!
+            'TableDefAttributeEnum
+            'Defs for HiddenObject and SystemObject wrong
+            'HiddenObject = 2
+            'SystemObject = -2147483648
             If Not (((td.Attributes And 2) = 2) Or ((td.Attributes And -2147483648#) = -2147483648#) _
                 Or ((td.Attributes And TableDefAttributeEnum.dbAttachedTable) = TableDefAttributeEnum.dbAttachedTable) _
                 Or ((td.Attributes And TableDefAttributeEnum.dbAttachedODBC) = TableDefAttributeEnum.dbAttachedODBC)) Then
@@ -543,16 +541,6 @@ Public Sub ExportAllSource()
     
     Next
     Debug.Print "[" & obj_count & "]"
-    
-'    If (Len(Replace(INCLUDE_TABLES, " ", "")) > 0) Then
-'        Debug.Print PadRight("Exporting tables...", 24);
-'        obj_count = 0
-'        For Each tblName In Split(INCLUDE_TABLES, ",")
-'            ExportTableWithData CStr(tblName), obj_path
-'            obj_count = obj_count + 1
-'        Next
-'        Debug.Print "[" & obj_count & "]"
-'    End If
 
     For Each obj_type In Split( _
         "forms|Forms|" & acForm & "," & _
@@ -766,6 +754,7 @@ End Sub
 
 Private Sub ExportTableWithData(tbl_name As String, obj_path As String)
     Application.ExportXML acExportTable, tbl_name, obj_path & tbl_name & ".xml", , , , acUTF8, acEmbedSchema
+    SanitizeXML obj_path & tbl_name & ".xml"
 End Sub
 
 Private Sub ExportTableWithoutData(tbl_name As String, obj_path As String)
@@ -777,5 +766,52 @@ End Sub
 Private Sub ImportTable(tblName As String, obj_path As String)
     'if there is no data, only the structure is imported
     Application.ImportXML obj_path & tblName & ".xml", acStructureAndData
+
+End Sub
+
+Public Sub SanitizeXML(filePath As String)
+
+    Dim saveStream As ADODB.Stream
+
+    Set saveStream = CreateObject("ADODB.Stream")
+    saveStream.Charset = "utf-8"
+    saveStream.LineSeparator = adLF
+    saveStream.Type = adTypeText
+    saveStream.Open
+
+    Dim objStream As ADODB.Stream
+    Dim strData As String
+    Set objStream = CreateObject("ADODB.Stream")
+
+    objStream.Charset = "utf-8"
+    objStream.LineSeparator = adLF
+    objStream.Type = adTypeText
+    objStream.Open
+    objStream.LoadFromFile (filePath)
+
+    Do While objStream.EOS = False
+    strData = objStream.ReadText(adReadLine)
+    If InStr(strData, "<dataroot xmlns:xsi=""http://www.w3.org/2001/XMLSchema-instance"" generated=") = 1 Then
+        strData = Left(strData, InStr(strData, "generated=") - 2)
+        
+        If InStrRev(strData, "/>") > 0 Then
+            strData = Left(strData, InStr(strData, "generated=") - 2)
+            strData = strData & "/>" & Chr(&HD)
+        Else
+            strData = Left(strData, InStr(strData, "generated=") - 2)
+            'add Chr(&HD) - adds Carriage Return - file has CRLF as line but stream wont take this as a lineSperator option
+            strData = strData & ">" & Chr(&HD)
+        End If
+        
+        saveStream.WriteText strData, adWriteLine
+    Else
+        'adWriteLine or LF will be missed off - line seperator removed when line is read
+        saveStream.WriteText strData, adWriteLine
+    End If
+
+    Loop
+    objStream.Close
+    saveStream.SaveToFile filePath, adSaveCreateOverWrite
+    saveStream.Close
 
 End Sub
