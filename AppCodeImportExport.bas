@@ -210,7 +210,7 @@ Private Function CloseFormsReports()
     Exit Function
 
 ErrorHandler:
-    Debug.Print "AppCodeImportExport.CloseFormsReports: Error #" & Err.Number & vbCrLf & Err.description
+    Debug.Print "AppCodeImportExport.CloseFormsReports: Error #" & Err.Number & vbCrLf & Err.Description
 End Function
 
 ' Pad a string on the right to make it `count` characters long.
@@ -465,7 +465,7 @@ End Sub
 ' macros, modules, and lookup tables to `source` folder under the
 ' database's folder.
 Public Sub ExportAllSource()
-    Dim db As Object ' DAO.Database
+    Dim db As Database 'Object ' DAO.Database
     Dim source_path As String
     Dim obj_path As String
     Dim qry As Object ' DAO.QueryDef
@@ -504,15 +504,55 @@ Public Sub ExportAllSource()
 
     obj_path = source_path & "tables\"
     ClearTextFilesFromDir obj_path, "txt"
-    If (Len(Replace(INCLUDE_TABLES, " ", "")) > 0) Then
-        Debug.Print PadRight("Exporting tables...", 24);
-        obj_count = 0
-        For Each tblName In Split(INCLUDE_TABLES, ",")
-            ExportTable CStr(tblName), obj_path
+    
+    Dim td As TableDef
+    obj_count = 0
+    Debug.Print PadRight("Exporting tables...", 24);
+    For Each td In CurrentDb.TableDefs
+        'TableDefAttributeEnum
+        'Defs for HiddenObject and SystemObject wrong
+        'HiddenObject = 2
+        'SystemObject = -2147483648
+        
+        Dim schemaOnly As Boolean
+        schemaOnly = True
+        
+        'check if we need to export the data
+        If (Len(Replace(INCLUDE_TABLES, " ", "")) > 0) Then
+            For Each tblName In Split(INCLUDE_TABLES, ",")
+                If td.Name = tblName Then schemaOnly = False
+            Next
+        End If
+        
+        If schemaOnly Then
+            'we dont want to export hidden or system objects - unless they are explicitly declared in INCLUDE_TABLES!
+'            Debug.Print td.Attributes
+'            Debug.Print td.Attributes And TableDefAttributeEnum.dbAttachedTable
+'            Debug.Print (td.Attributes And TableDefAttributeEnum.dbAttachedTable) = TableDefAttributeEnum.dbAttachedTable
+            If Not (((td.Attributes And 2) = 2) Or ((td.Attributes And -2147483648#) = -2147483648#) _
+                Or ((td.Attributes And TableDefAttributeEnum.dbAttachedTable) = TableDefAttributeEnum.dbAttachedTable) _
+                Or ((td.Attributes And TableDefAttributeEnum.dbAttachedODBC) = TableDefAttributeEnum.dbAttachedODBC)) Then
+                ExportTableWithoutData td.Name, obj_path
+                obj_count = obj_count + 1
+            End If
+
+        Else
+            ExportTableWithData td.Name, obj_path
             obj_count = obj_count + 1
-        Next
-        Debug.Print "[" & obj_count & "]"
-    End If
+        End If
+    
+    Next
+    Debug.Print "[" & obj_count & "]"
+    
+'    If (Len(Replace(INCLUDE_TABLES, " ", "")) > 0) Then
+'        Debug.Print PadRight("Exporting tables...", 24);
+'        obj_count = 0
+'        For Each tblName In Split(INCLUDE_TABLES, ",")
+'            ExportTableWithData CStr(tblName), obj_path
+'            obj_count = obj_count + 1
+'        Next
+'        Debug.Print "[" & obj_count & "]"
+'    End If
 
     For Each obj_type In Split( _
         "forms|Forms|" & acForm & "," & _
@@ -724,45 +764,18 @@ Private Sub ExportTable(tbl_name As String, obj_path As String)
     ConvertUcs2Utf8 TempFile(), obj_path & tbl_name & ".txt"
 End Sub
 
+Private Sub ExportTableWithData(tbl_name As String, obj_path As String)
+    Application.ExportXML acExportTable, tbl_name, obj_path & tbl_name & ".xml", , , , acUTF8, acEmbedSchema
+End Sub
+
+Private Sub ExportTableWithoutData(tbl_name As String, obj_path As String)
+    MkDirIfNotExist (obj_path)
+    Application.ExportXML acExportTable, tbl_name, , obj_path & tbl_name & ".xml", , , acUTF8
+End Sub
+
 ' Import the lookup table `tblName` from `source\tables`.
 Private Sub ImportTable(tblName As String, obj_path As String)
-    Dim db As Object ' DAO.Database
-    Dim rs As Object ' DAO.Recordset
-    Dim fieldObj As Object ' DAO.Field
-    Dim fso, InFile As Object
-    Dim C As Long, buf As String, Values() As String, Value As Variant
+    'if there is no data, only the structure is imported
+    Application.ImportXML obj_path & tblName & ".xml", acStructureAndData
 
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    ConvertUtf8Ucs2 obj_path & tblName & ".txt", TempFile()
-    ' open file for reading with Create=False, Unicode=True (USC-2 Little Endian format)
-    Set InFile = fso.OpenTextFile(TempFile(), ForReading, False, TristateTrue)
-    Set db = CurrentDb
-
-    db.Execute "DELETE FROM [" & tblName & "]"
-    Set rs = db.OpenRecordset(tblName)
-    buf = InFile.ReadLine()
-    Do Until InFile.AtEndOfStream
-        buf = InFile.ReadLine()
-        If Len(Trim(buf)) > 0 Then
-            Values = Split(buf, vbTab)
-            C = 0
-            rs.AddNew
-            For Each fieldObj In rs.Fields
-                Value = Values(C)
-                If Len(Value) = 0 Then
-                    Value = Null
-                Else
-                    Value = Replace(Value, "\t", vbTab)
-                    Value = Replace(Value, "\n", vbCrLf)
-                    Value = Replace(Value, "\\", "\")
-                End If
-                rs(fieldObj.Name) = Value
-                C = C + 1
-            Next
-            rs.Update
-        End If
-    Loop
-
-    rs.Close
-    InFile.Close
 End Sub
