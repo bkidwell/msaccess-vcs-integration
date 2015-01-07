@@ -1,3 +1,4 @@
+Attribute VB_Name = "AppCodeImportExport"
 ' Access Module `AppCodeImportExport`
 ' -----------------------------------
 '
@@ -32,7 +33,6 @@
 ' * Maybe integrate into a dialog box triggered by a menu item.
 ' * Warning of destructive overwrite.
 
-Attribute VB_Name = "AppCodeImportExport"
 Option Compare Database
 Option Explicit
 
@@ -41,12 +41,12 @@ Option Explicit
 ' --------------------------------
 
 ' List of lookup tables that are part of the program rather than the
-' data, to be exported with source code
+' data, to be exported with contained data
 '
 ' Provide a comma separated list of table names, or an empty string
-' ("") if no tables are to be exported with the source code.
+' ("") if no data tables are to be exported.
 
-Private Const INCLUDE_TABLES = ""
+Private Const DATA_TABLES = ""
 
 ' Do more aggressive removal of superfluous blobs from exported MS
 ' Access source code?
@@ -210,7 +210,7 @@ Private Function CloseFormsReports()
     Exit Function
 
 ErrorHandler:
-    Debug.Print "AppCodeImportExport.CloseFormsReports: Error #" & Err.Number & vbCrLf & Err.description
+    Debug.Print "AppCodeImportExport.CloseFormsReports: Error #" & Err.Number & vbCrLf & Err.Description
 End Function
 
 ' Pad a string on the right to make it `count` characters long.
@@ -233,7 +233,7 @@ Private Function TempFile() As String
 End Function
 
 ' Export a database object with optional UCS2-to-UTF-8 conversion.
-Private Sub ExportObject(obj_type_num As Integer, obj_name As String, file_path As String, _
+Private Sub ExportObject(ByVal obj_type_num As AcObjectType, obj_name As String, file_path As String, _
     Optional Ucs2Convert As Boolean = False)
 
     MkDirIfNotExist Left(file_path, InStrRev(file_path, "\"))
@@ -246,7 +246,7 @@ Private Sub ExportObject(obj_type_num As Integer, obj_name As String, file_path 
 End Sub
 
 ' Import a database object with optional UTF-8-to-UCS2 conversion.
-Private Sub ImportObject(obj_type_num As Integer, obj_name As String, file_path As String, _
+Private Sub ImportObject(ByVal obj_type_num As AcObjectType, obj_name As String, file_path As String, _
     Optional Ucs2Convert As Boolean = False)
 
     If Ucs2Convert Then
@@ -465,7 +465,7 @@ End Sub
 ' macros, modules, and lookup tables to `source` folder under the
 ' database's folder.
 Public Sub ExportAllSource()
-    Dim db As Object ' DAO.Database
+    Dim db As Database 'Object ' DAO.Database
     Dim source_path As String
     Dim obj_path As String
     Dim qry As Object ' DAO.QueryDef
@@ -491,7 +491,7 @@ Public Sub ExportAllSource()
 
     obj_path = source_path & "queries\"
     ClearTextFilesFromDir obj_path, "bas"
-    Debug.Print PadRight("Exporting queries...", 24);
+    Debug.Print PadRight("Exporting queries...", 30);
     obj_count = 0
     For Each qry In db.QueryDefs
         If Left(qry.Name, 1) <> "~" Then
@@ -504,22 +504,53 @@ Public Sub ExportAllSource()
 
     obj_path = source_path & "tables\"
     ClearTextFilesFromDir obj_path, "txt"
-    If (Len(Replace(INCLUDE_TABLES, " ", "")) > 0) Then
-        Debug.Print PadRight("Exporting tables...", 24);
-        obj_count = 0
-        For Each tblName In Split(INCLUDE_TABLES, ",")
-            ExportTable CStr(tblName), obj_path
-            obj_count = obj_count + 1
-        Next
-        Debug.Print "[" & obj_count & "]"
-    End If
+    
+    Dim td As TableDef
+    obj_count = 0
+    Debug.Print PadRight("Exporting tables...", 30);
+    For Each td In CurrentDb.TableDefs
 
+        
+        Dim schemaOnly As Boolean
+        schemaOnly = True
+        
+        'check if we need to export the data
+        If (Len(Replace(DATA_TABLES, " ", "")) > 0) Then
+            For Each tblName In Split(DATA_TABLES, ",")
+                If td.Name = tblName Then schemaOnly = False
+            Next
+        End If
+        
+        If schemaOnly Then
+            'we dont want to export hidden, system or linked objects - unless they are explicitly declared in DATA_TABLES!
+            'TableDefAttributeEnum
+            'Defs for HiddenObject and SystemObject wrong
+            'HiddenObject = 2
+            'SystemObject = -2147483648
+            If Not (((td.Attributes And 2) = 2) Or ((td.Attributes And -2147483648#) = -2147483648#) _
+                Or ((td.Attributes And TableDefAttributeEnum.dbAttachedTable) = TableDefAttributeEnum.dbAttachedTable) _
+                Or ((td.Attributes And TableDefAttributeEnum.dbAttachedODBC) = TableDefAttributeEnum.dbAttachedODBC) _
+                Or ((td.Attributes And TableDefAttributeEnum.dbHiddenObject) = TableDefAttributeEnum.dbHiddenObject) _
+                Or ((td.Attributes And TableDefAttributeEnum.dbSystemObject) = TableDefAttributeEnum.dbSystemObject)) Then
+                ExportTableWithoutData td.Name, obj_path
+                obj_count = obj_count + 1
+            End If
+
+        Else
+            ExportTableWithData td.Name, obj_path
+            obj_count = obj_count + 1
+        End If
+    
+    Next
+    Debug.Print "[" & obj_count & "]"
+
+    'There is no list of data macros, so we have to use the list of tables
     For Each obj_type In Split( _
         "forms|Forms|" & acForm & "," & _
         "reports|Reports|" & acReport & "," & _
         "macros|Scripts|" & acMacro & "," & _
-        "modules|Modules|" & acModule _
-        , "," _
+        "modules|Modules|" & acModule & "," & _
+        "tables\macros|Tables|" & acTableDataMacro, "," _
     )
         obj_type_split = Split(obj_type, "|")
         obj_type_label = obj_type_split(0)
@@ -528,7 +559,7 @@ Public Sub ExportAllSource()
         obj_path = source_path & obj_type_label & "\"
         obj_count = 0
         ClearTextFilesFromDir obj_path, "bas"
-        Debug.Print PadRight("Exporting " & obj_type_label & "...", 24);
+        Debug.Print PadRight("Exporting " & obj_type_label & "...", 30);
         For Each doc In db.Containers(obj_type_name).Documents
             If Left(doc.Name, 1) <> "~" Then
                 If obj_type_label = "modules" Then
@@ -536,8 +567,17 @@ Public Sub ExportAllSource()
                 Else
                     ucs2 = UsingUcs2
                 End If
+                'this is very bad - needs proper error handling
+                'done for tables that don't have macros - export throws error
+                On Error GoTo Err_ExportObj:
                 ExportObject obj_type_num, doc.Name, obj_path & doc.Name & ".bas", ucs2
+                If obj_type_num = acTableDataMacro Then FormatDataMacro obj_path & doc.Name & ".bas"
                 obj_count = obj_count + 1
+                GoTo Err_ExportObj_Fin:
+Err_ExportObj:
+                Resume Err_ExportObj_Fin:
+Err_ExportObj_Fin:
+                On Error GoTo 0
             End If
         Next
         Debug.Print "[" & obj_count & "]"
@@ -600,7 +640,7 @@ Public Sub ImportAllSource()
     End If
 
     obj_path = source_path & "tables\"
-    FileName = Dir(obj_path & "*.txt")
+    FileName = Dir(obj_path & "*.xml")
     If Len(FileName) > 0 Then
         Debug.Print PadRight("Importing tables...", 24);
         obj_count = 0
@@ -617,8 +657,8 @@ Public Sub ImportAllSource()
         "forms|" & acForm & "," & _
         "reports|" & acReport & "," & _
         "macros|" & acMacro & "," & _
-        "modules|" & acModule _
-        , "," _
+        "modules|" & acModule & "," & _
+        "tables\macros|" & acTableDataMacro, "," _
     )
         obj_type_split = Split(obj_type, "|")
         obj_type_label = obj_type_split(0)
@@ -724,45 +764,129 @@ Private Sub ExportTable(tbl_name As String, obj_path As String)
     ConvertUcs2Utf8 TempFile(), obj_path & tbl_name & ".txt"
 End Sub
 
+Private Sub ExportTableWithData(tbl_name As String, obj_path As String)
+    Application.ExportXML acExportTable, tbl_name, obj_path & tbl_name & ".xml", , , , acUTF8, acEmbedSchema
+    SanitizeXML obj_path & tbl_name & ".xml"
+End Sub
+
+Private Sub ExportTableWithoutData(tbl_name As String, obj_path As String)
+    MkDirIfNotExist (obj_path)
+    Application.ExportXML acExportTable, tbl_name, , obj_path & tbl_name & ".xml", , , acUTF8
+End Sub
+
 ' Import the lookup table `tblName` from `source\tables`.
 Private Sub ImportTable(tblName As String, obj_path As String)
-    Dim db As Object ' DAO.Database
-    Dim rs As Object ' DAO.Recordset
-    Dim fieldObj As Object ' DAO.Field
-    Dim fso, InFile As Object
-    Dim C As Long, buf As String, Values() As String, Value As Variant
+    'if there is no data, only the structure is imported
+    Application.ImportXML obj_path & tblName & ".xml", acStructureAndData
 
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    ConvertUtf8Ucs2 obj_path & tblName & ".txt", TempFile()
-    ' open file for reading with Create=False, Unicode=True (USC-2 Little Endian format)
-    Set InFile = fso.OpenTextFile(TempFile(), ForReading, False, TristateTrue)
-    Set db = CurrentDb
-
-    db.Execute "DELETE FROM [" & tblName & "]"
-    Set rs = db.OpenRecordset(tblName)
-    buf = InFile.ReadLine()
-    Do Until InFile.AtEndOfStream
-        buf = InFile.ReadLine()
-        If Len(Trim(buf)) > 0 Then
-            Values = Split(buf, vbTab)
-            C = 0
-            rs.AddNew
-            For Each fieldObj In rs.Fields
-                Value = Values(C)
-                If Len(Value) = 0 Then
-                    Value = Null
-                Else
-                    Value = Replace(Value, "\t", vbTab)
-                    Value = Replace(Value, "\n", vbCrLf)
-                    Value = Replace(Value, "\\", "\")
-                End If
-                rs(fieldObj.Name) = Value
-                C = C + 1
-            Next
-            rs.Update
-        End If
-    Loop
-
-    rs.Close
-    InFile.Close
 End Sub
+
+Private Sub SanitizeXML(filePath As String)
+
+    Dim saveStream As ADODB.Stream
+
+    Set saveStream = CreateObject("ADODB.Stream")
+    saveStream.Charset = "utf-8"
+    saveStream.LineSeparator = adLF
+    saveStream.Type = adTypeText
+    saveStream.Open
+
+    Dim objStream As ADODB.Stream
+    Dim strData As String
+    Set objStream = CreateObject("ADODB.Stream")
+
+    objStream.Charset = "utf-8"
+    objStream.LineSeparator = adLF
+    objStream.Type = adTypeText
+    objStream.Open
+    objStream.LoadFromFile (filePath)
+
+    Do While objStream.EOS = False
+    strData = objStream.ReadText(adReadLine)
+    If InStr(strData, "<dataroot xmlns:xsi=""http://www.w3.org/2001/XMLSchema-instance"" generated=") = 1 Then
+        strData = Left(strData, InStr(strData, "generated=") - 2)
+        
+        If InStrRev(strData, "/>") > 0 Then
+            strData = Left(strData, InStr(strData, "generated=") - 2)
+            strData = strData & "/>" & Chr(&HD)
+        Else
+            strData = Left(strData, InStr(strData, "generated=") - 2)
+            'add Chr(&HD) - adds Carriage Return - file has CRLF as line but stream wont take this as a lineSperator option
+            strData = strData & ">" & Chr(&HD)
+        End If
+        
+        saveStream.WriteText strData, adWriteLine
+    Else
+        'adWriteLine or LF will be missed off - line seperator removed when line is read
+        saveStream.WriteText strData, adWriteLine
+    End If
+
+    Loop
+    objStream.Close
+    saveStream.SaveToFile filePath, adSaveCreateOverWrite
+    saveStream.Close
+
+End Sub
+
+'Splits exported DataMacro XML onto multiple lines
+'Allows git to find changes within lines using diff
+Private Sub FormatDataMacro(filePath As String)
+
+    Dim saveStream As ADODB.Stream
+
+    Set saveStream = CreateObject("ADODB.Stream")
+    saveStream.Charset = "utf-8"
+    saveStream.Type = adTypeText
+    saveStream.Open
+
+    Dim objStream As ADODB.Stream
+    Dim strData As String
+    Set objStream = CreateObject("ADODB.Stream")
+
+    objStream.Charset = "utf-8"
+    objStream.Type = adTypeText
+    objStream.Open
+    objStream.LoadFromFile (filePath)
+    
+    Do While Not objStream.EOS
+        strData = objStream.ReadText(adReadLine)
+
+        Dim tag As Variant
+        
+        For Each tag In Split(strData, ">")
+            If tag <> "" Then
+                saveStream.WriteText tag & ">", adWriteLine
+            End If
+        Next
+        
+    Loop
+    
+    objStream.Close
+    saveStream.SaveToFile filePath, adSaveCreateOverWrite
+    saveStream.Close
+
+End Sub
+
+
+
+Public Sub testExportObject(obj_type_num As AcObjectType, obj_name As String, file_path As String, _
+    Optional Ucs2Convert As Boolean = False)
+    ExportObject obj_type_num, obj_name, file_path & obj_name & ".bas", Ucs2Convert
+    
+    If obj_type_num <> acModule Then
+        SanitizeTextFiles file_path, "bas"
+    End If
+
+
+    DelIfExist TempFile()
+
+End Sub
+
+Public Sub testImportObject(obj_type_num As AcObjectType, obj_name As String, file_path As String, _
+    Optional Ucs2Convert As Boolean = False)
+    ImportObject obj_type_num, obj_name, file_path, Ucs2Convert
+
+    DelIfExist TempFile()
+    
+End Sub
+
