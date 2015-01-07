@@ -33,7 +33,6 @@ Attribute VB_Name = "AppCodeImportExport"
 ' * Maybe integrate into a dialog box triggered by a menu item.
 ' * Warning of destructive overwrite.
 
-Attribute VB_Name = "AppCodeImportExport"
 Option Compare Database
 Option Explicit
 
@@ -572,6 +571,7 @@ Public Sub ExportAllSource()
                 'done for tables that don't have macros - export throws error
                 On Error GoTo Err_ExportObj:
                 ExportObject obj_type_num, doc.Name, obj_path & doc.Name & ".bas", ucs2
+                If obj_type_num = acTableDataMacro Then FormatDataMacro obj_path & doc.Name & ".bas"
                 obj_count = obj_count + 1
                 GoTo Err_ExportObj_Fin:
 Err_ExportObj:
@@ -827,6 +827,47 @@ Private Sub SanitizeXML(filePath As String)
     saveStream.Close
 
 End Sub
+
+'Splits exported DataMacro XML onto multiple lines
+'Allows git to find changes within lines using diff
+Private Sub FormatDataMacro(filePath As String)
+
+    Dim saveStream As ADODB.Stream
+
+    Set saveStream = CreateObject("ADODB.Stream")
+    saveStream.Charset = "utf-8"
+    saveStream.Type = adTypeText
+    saveStream.Open
+
+    Dim objStream As ADODB.Stream
+    Dim strData As String
+    Set objStream = CreateObject("ADODB.Stream")
+
+    objStream.Charset = "utf-8"
+    objStream.Type = adTypeText
+    objStream.Open
+    objStream.LoadFromFile (filePath)
+    
+    Do While Not objStream.EOS
+        strData = objStream.ReadText(adReadLine)
+
+        Dim tag As Variant
+        
+        For Each tag In Split(strData, ">")
+            If tag <> "" Then
+                saveStream.WriteText tag & ">", adWriteLine
+            End If
+        Next
+        
+    Loop
+    
+    objStream.Close
+    saveStream.SaveToFile filePath, adSaveCreateOverWrite
+    saveStream.Close
+
+End Sub
+
+
 
 Public Sub testExportObject(obj_type_num As AcObjectType, obj_name As String, file_path As String, _
     Optional Ucs2Convert As Boolean = False)
